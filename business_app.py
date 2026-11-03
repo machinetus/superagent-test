@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""business_app.py — 演示用「脆弱业务程序」（含 S2 演示注入的 Bug）。
+"""business_app.py — 演示用「脆弱业务程序」。
 
-注入的 Bug：`crash = 100 / 0` —— 无论参数如何，启动即除零崩溃，
-用于演示「重启无效 → 需修代码 → 提 PR」的 S2 场景。
+S2 修复：移除启动时无条件的 `crash = 100 / 0` 除零缺陷，
+恢复「按心跳间隔正常运行」的原有行为。
 """
 
 import os
@@ -20,9 +20,6 @@ def _on_terminate(signum, _frame):
 
 
 def main():
-    # === 注入的 Bug（供 S2 演示）：启动即除零崩溃，与参数无关 ===
-    crash = 100 / 0  # noqa: F841
-
     if len(sys.argv) > 1:
         raw = sys.argv[1]
         try:
