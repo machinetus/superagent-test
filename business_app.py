@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""business_app.py — 演示用「脆弱业务程序」。
+"""business_app.py — 演示用「脆弱业务程序」（含 S2 演示注入的 Bug）。
 
-行为：
-1. 常驻后台，周期性打印「服务运行中」；
-2. 收到 SIGTERM / SIGINT（被 kill）时退出；
-3. 收到非法参数（非整数，或整数 0）时抛 ZeroDivisionError，模拟业务代码 Bug；
-4. 启动成功后自己写 business_app.pid（供 restart.sh 停旧进程）。
+注入的 Bug：`crash = 100 / 0` —— 无论参数如何，启动即除零崩溃，
+用于演示「重启无效 → 需修代码 → 提 PR」的 S2 场景。
 """
 
 import os
@@ -23,7 +20,9 @@ def _on_terminate(signum, _frame):
 
 
 def main():
-    # 参数解析：非法参数 -> ZeroDivisionError（模拟业务代码 Bug）
+    # === 注入的 Bug（供 S2 演示）：启动即除零崩溃，与参数无关 ===
+    crash = 100 / 0  # noqa: F841
+
     if len(sys.argv) > 1:
         raw = sys.argv[1]
         try:
@@ -33,9 +32,8 @@ def main():
         if value == 0:
             raise ZeroDivisionError("非法参数：除数为 0")
     else:
-        value = 2  # 默认心跳间隔（秒）
+        value = 2
 
-    # 自己写 PID（在参数校验通过后，保证崩溃不留下脏 pidfile）
     with open(PID_FILE, "w") as f:
         f.write(str(os.getpid()))
 
