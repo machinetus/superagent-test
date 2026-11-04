@@ -336,7 +336,7 @@ def index():
 
 def _on_terminate(signum, _frame):
     log(f"收到信号 {signum}，进程退出。")
-    sys.exit(0)
+    os._exit(0)  # 立即退出，确保端口释放
 
 
 def main():
