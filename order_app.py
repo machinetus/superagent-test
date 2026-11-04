@@ -340,7 +340,6 @@ def _on_terminate(signum, _frame):
 
 
 def main():
-    _injected = 1 / 0  # INJECTED_BUG
     import logging
     logging.getLogger("werkzeug").setLevel(logging.ERROR)  # 关闭访问日志噪音
     init_db()
