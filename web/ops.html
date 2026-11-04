@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIOps 调度大屏</title>
+<style>
+  :root{
+    --bg:#0b1020; --panel:#121a2e; --line:#22304d; --text:#dbe6ff; --dim:#7d8db3;
+    --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --accent:#38bdf8; --purple:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 "Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 22px;border-bottom:1px solid var(--line);background:linear-gradient(90deg,#0e1730,#0b1020)}
+  h1{font-size:19px;margin:0;letter-spacing:.5px}
+  h1 span{color:var(--accent)}
+  .meta{color:var(--dim);font-size:12px}
+  .wrap{padding:16px 22px;display:grid;gap:14px}
+  .row{display:grid;gap:14px}
+  .row.two{grid-template-columns:1.1fr 2fr}
+  .row.three{grid-template-columns:repeat(3,1fr)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .card h2{margin:0 0 10px;font-size:13px;color:var(--dim);font-weight:600;letter-spacing:.4px}
+  .service{display:flex;align-items:center;gap:14px;padding:4px 0}
+  .dot{width:14px;height:14px;border-radius:50%;background:var(--bad);box-shadow:0 0 12px var(--bad)}
+  .dot.on{background:var(--ok);box-shadow:0 0 12px var(--ok)}
+  .service .name{font-size:15px;font-weight:600}
+  .service .sub{color:var(--dim);font-size:12px}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
+  .kpi{background:#0e1730;border:1px solid var(--line);border-radius:10px;padding:10px}
+  .kpi b{display:block;font-size:22px;color:var(--accent)}
+  .kpi span{color:var(--dim);font-size:12px}
+  .worker{display:flex;flex-direction:column;gap:8px;border-left:3px solid var(--line)}
+  .worker.busy{border-left-color:var(--bad)}
+  .worker.idle{border-left-color:var(--ok)}
+  .worker .top{display:flex;align-items:center;justify-content:space-between}
+  .worker .id{font-weight:700}
+  .worker .role{color:var(--dim);font-size:12px}
+  .badge{font-size:11px;padding:2px 8px;border-radius:999px;background:#22304d;color:var(--dim)}
+  .badge.busy{background:rgba(239,68,68,.16);color:#fca5a5}
+  .badge.idle{background:rgba(34,197,94,.16);color:#86efac}
+  .worker .cur{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--warn);min-height:18px}
+  .worker .done{color:var(--dim);font-size:12px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:600;font-size:11.5px}
+  .pill{font-size:11px;padding:1px 7px;border-radius:999px;background:#22304d;color:#a9bbd9}
+  .pill.P0{background:rgba(239,68,68,.18);color:#fca5a5}
+  .pill.P1{background:rgba(245,158,11,.18);color:#fcd34d}
+  .pill.P2{background:rgba(56,189,248,.16);color:#7dd3fc}
+  .st-resolved{color:var(--ok)} .st-escalated{color:var(--warn)} .st-failed{color:var(--bad)}
+  .st-queued,.st-running,.st-accepted{color:var(--accent)}
+  .stream{max-height:260px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:#9fb2d6}
+  .stream div{padding:3px 0;border-bottom:1px dashed #1b2540}
+  .stream .t{color:#5b6b8c;margin-right:8px}
+  .stream .ev-ok{color:#86efac}
+  .stream .ev-bad{color:#fca5a5}
+  .stream .ev-warn{color:#fcd34d}
+  .actions{display:flex;flex-wrap:wrap;gap:8px}
+  button{cursor:pointer;border:1px solid var(--line);background:#17223c;color:var(--text);padding:8px 14px;border-radius:8px;font-size:13px}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  button.primary{background:linear-gradient(90deg,#0ea5e9,#6366f1);border:none;color:#fff;font-weight:600}
+  button.danger{border-color:#7f1d1d;color:#fca5a5}
+  .empty{color:var(--dim);font-size:12px;padding:8px 0}
+  canvas{width:100%;height:110px;display:block}
+  .legend{display:flex;gap:14px;font-size:11.5px;color:var(--dim);margin-top:6px;flex-wrap:wrap}
+  .legend i{display:inline-block;width:10px;height:3px;border-radius:2px;margin-right:5px;vertical-align:middle}
+</style>
+</head>
+<body>
+<header>
+  <h1>AIOps <span>调度大屏</span></h1>
+  <div class="meta" id="meta">加载中…</div>
+</header>
+
+<div class="wrap">
+  <div class="row two">
+    <div class="card">
+      <h2>服务健康</h2>
+      <div id="svcList"></div>
+      <div class="kpis">
+        <div class="kpi"><b id="kQueued">0</b><span>排队中</span></div>
+        <div class="kpi"><b id="kBusy">0</b><span>处理中</span></div>
+        <div class="kpi"><b id="kDone">0</b><span>已完成</span></div>
+        <div class="kpi"><b id="kEsc">0</b><span>转人工</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Worker 池（调度分配）</h2>
+      <div class="row three" id="pool"></div>
+    </div>
+  </div>
+
+  <div class="row three">
+    <div class="card">
+      <h2>QPS / 错误率</h2>
+      <canvas id="cQps"></canvas>
+      <div class="legend"><span><i style="background:#38bdf8"></i>QPS</span><span><i style="background:#ef4444"></i>错误率%</span></div>
+    </div>
+    <div class="card">
+      <h2>Worker 利用率</h2>
+      <canvas id="cBusy"></canvas>
+      <div class="legend"><span><i style="background:#22c55e"></i>忙碌数（/3）</span></div>
+    </div>
+    <div class="card">
+      <h2>队列长度</h2>
+      <canvas id="cQueue"></canvas>
+      <div class="legend"><span><i style="background:#f59e0b"></i>排队工单</span></div>
+    </div>
+  </div>
+
+  <div class="row two">
+    <div class="card">
+      <h2>工单队列（按优先级）</h2>
+      <div id="queue"></div>
+    </div>
+    <div class="card">
+      <h2>最近工单</h2>
+      <table>
+        <thead><tr><th>工单</th><th>类型</th><th>优先级</th><th>Worker</th><th>状态</th></tr></thead>
+        <tbody id="tickets"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="row two">
+    <div class="card">
+      <h2>演示操作</h2>
+      <div class="actions">
+        <button class="primary" onclick="stress()">⚡ 压力测试（一次投 10 个）</button>
+        <button class="danger" onclick="fault('crash')">💥 注入崩溃</button>
+        <button onclick="fault('dirty')">🛑 注入脏数据</button>
+        <button onclick="fault('flood')">🌊 注入高频流量</button>
+        <button onclick="fault('hang')">🧊 注入卡死</button>
+        <button onclick="fault('slow')">🐌 注入慢接口</button>
+        <button onclick="fault('db_lock')">🔒 注入锁表</button>
+        <button onclick="fault('cpu')">🔥 注入 CPU 告警</button>
+        <button onclick="fault('code')">🧩 注入代码缺陷（研发官）</button>
+        <a href="http://localhost:8081/" target="_blank" style="padding:8px 14px;border:1px solid var(--line);border-radius:8px;color:var(--text);text-decoration:none;font-size:13px">🛒 打开业务前台</a>
+      </div>
+      <div class="empty" id="actMsg" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>审计流水（实时）</h2>
+      <div class="stream" id="stream"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let hist = [];
+
+async function snapshot(){
+  try{
+    const [r1, r2] = await Promise.all([
+      fetch('/api/snapshot', {cache:'no-store'}),
+      fetch('/api/history', {cache:'no-store'})
+    ]);
+    render(await r1.json());
+    hist = await r2.json();
+    drawCharts();
+  }catch(e){
+    $('meta').textContent = '⚠ 无法连接 Router：' + e.message;
+  }
+}
+
+function render(d){
+  $('meta').textContent = `刷新于 ${d.ts.replace('T',' ').slice(0,19)} ｜ Router 在线`;
+  const svcs = d.services || (d.service ? [d.service] : []);
+  $('svcList').innerHTML = svcs.length ? svcs.map(s => `
+    <div class="service">
+      <div class="dot ${s.alive ? 'on' : ''}"></div>
+      <div>
+        <div class="name">${esc(s.name)}</div>
+        <div class="sub">${s.alive ? '运行中 · PID ' + esc(s.pid) : '未运行（等待处置）'}</div>
+      </div>
+    </div>`).join('') : '<div class="empty">暂无服务</div>';
+
+  const st = d.stats || {};
+  $('kQueued').textContent = st.queued ?? 0;
+  $('kBusy').textContent = st.busy ?? 0;
+  $('kDone').textContent = st.done ?? 0;
+  $('kEsc').textContent = st.escalated ?? 0;
+
+  $('pool').innerHTML = (d.pool || []).map(w => `
+    <div class="card worker ${esc(w.state)}">
+      <div class="top">
+        <div><div class="id">${esc(w.id)} <span class="role">${esc(w.name)}</span></div></div>
+        <span class="badge ${esc(w.state)}">${w.state === 'busy' ? '忙碌' : '空闲'}</span>
+      </div>
+      <div class="cur">${w.ticket ? '▶ ' + esc(w.ticket) : '—'}</div>
+      <div class="done">累计处理 ${w.done}</div>
+    </div>`).join('');
+
+  const q = d.queue || [];
+  $('queue').innerHTML = q.length ? `<table>
+    <thead><tr><th>优先级</th><th>工单</th><th>类型</th></tr></thead><tbody>
+    ${q.map(x => `<tr><td><span class="pill ${esc(x.priority)}">${esc(x.priority)}</span></td>
+      <td>${esc(x.ticket_id)}</td><td>${esc(x.signature)}</td></tr>`).join('')}
+    </tbody></table>` : '<div class="empty">队列为空</div>';
+
+  const ts = d.tickets || [];
+  $('tickets').innerHTML = ts.length ? ts.map(t => `<tr>
+      <td>${esc(t.ticket_id)}</td>
+      <td>${esc(t.signature)}</td>
+      <td><span class="pill ${esc(t.priority || '')}">${esc(t.priority || '-')}</span></td>
+      <td>${esc(t.worker || '-')}</td>
+      <td class="st-${esc(t.status)}">${esc(t.status)}</td>
+    </tr>`).join('') : '<tr><td colspan="5" class="empty">暂无工单</td></tr>';
+
+  $('stream').innerHTML = (d.audit || []).slice().reverse().map(a => {
+    const ev = a.event || '';
+    let cls = '';
+    if(/resolved|notify\.sent|enqueue/.test(ev)) cls = 'ev-ok';
+    else if(/failed|error|escalated/.test(ev)) cls = 'ev-bad';
+    else if(/running|accepted/.test(ev)) cls = 'ev-warn';
+    return `<div class="${cls}"><span class="t">${esc((a.at || '').slice(11,19))}</span>${esc(ev)}
+      ${a.ticket_id ? ' · ' + esc(a.ticket_id) : ''}
+      ${a.priority ? ' · ' + esc(a.priority) : ''}
+      ${a.signature ? ' · ' + esc(a.signature) : ''}</div>`;
+  }).join('');
+}
+
+function drawChart(canvas, series, maxY){
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || 300, h = canvas.clientHeight || 110;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const pad = {l: 30, r: 8, t: 8, b: 6};
+  const max = maxY || Math.max(1, ...series.flatMap(s => s.data));
+  ctx.strokeStyle = '#1b2540'; ctx.lineWidth = 1;
+  for(let i = 0; i <= 4; i++){
+    const y = pad.t + (h - pad.t - pad.b) * i / 4;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(w - pad.r, y); ctx.stroke();
+    ctx.fillStyle = '#5b6b8c'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+    ctx.fillText(String(Math.round(max * (1 - i / 4))), pad.l - 4, y + 3);
+  }
+  series.forEach(s => {
+    const n = s.data.length;
+    if(n < 2) return;
+    const step = (w - pad.l - pad.r) / (n - 1);
+    ctx.beginPath();
+    s.data.forEach((v, i) => {
+      const x = pad.l + i * step;
+      const y = pad.t + (h - pad.t - pad.b) * (1 - Math.min(v, max) / max);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.stroke();
+    // 填充
+    ctx.lineTo(w - pad.r, h - pad.b);
+    ctx.lineTo(pad.l, h - pad.b);
+    ctx.closePath();
+    ctx.fillStyle = s.color.replace(')', ',0.10)').replace('rgb', 'rgba');
+    ctx.fill();
+  });
+}
+
+function drawCharts(){
+  drawChart($('cQps'), [
+    {data: hist.map(x => x.qps || 0), color: 'rgb(56,189,248)'},
+    {data: hist.map(x => x.err || 0), color: 'rgb(239,68,68)'}
+  ]);
+  drawChart($('cBusy'), [{data: hist.map(x => x.busy || 0), color: 'rgb(34,197,94)'}], 3);
+  drawChart($('cQueue'), [{data: hist.map(x => x.queue || 0), color: 'rgb(245,158,11)'}]);
+}
+
+async function stress(){
+  $('actMsg').textContent = '正在注入 10 个工单…';
+  const r = await fetch('/api/demo/stress?n=10', {method:'POST'});
+  const d = await r.json();
+  $('actMsg').textContent = `已投 ${d.count} 个工单，观察队列与 Worker 变化 👀`;
+  setTimeout(snapshot, 400);
+}
+
+async function fault(mode){
+  $('actMsg').textContent = `正在注入：${mode}…`;
+  const r = await fetch('/api/demo/fault?mode=' + encodeURIComponent(mode), {method:'POST'});
+  const d = await r.json();
+  $('actMsg').textContent = `已注入 ${mode}` + (d.ticket_id ? `（工单 ${d.ticket_id}）` : (d.note ? `（${d.note}）` : ''));
+  setTimeout(snapshot, 400);
+}
+
+snapshot();
+setInterval(snapshot, 2000);
+</script>
+</body>
+</html>

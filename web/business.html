@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>迷你商城 · 订单演示</title>
+<style>
+  :root{--bg:#f6f7fb;--card:#fff;--line:#e5e8f0;--text:#1f2430;--dim:#7b8496;--accent:#3b82f6;--ok:#16a34a;--bad:#dc2626}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 "Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  header{background:#fff;border-bottom:1px solid var(--line);padding:14px 28px;display:flex;align-items:center;justify-content:space-between}
+  h1{margin:0;font-size:18px}
+  .stats{display:flex;gap:18px;color:var(--dim);font-size:13px}
+  .stats b{color:var(--text)}
+  main{max-width:1080px;margin:24px auto;padding:0 24px;display:grid;gap:20px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  .card h2{margin:0 0 14px;font-size:15px;color:var(--dim);font-weight:600}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .item{border:1px solid var(--line);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:8px}
+  .item .name{font-weight:600;font-size:15px}
+  .item .price{color:var(--bad);font-weight:700;font-size:17px}
+  .item .qty{color:var(--dim);font-size:12px}
+  button{cursor:pointer;border:none;background:var(--accent);color:#fff;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600}
+  button:hover{filter:brightness(1.08)}
+  button.danger{background:var(--bad)}
+  button.ghost{background:#eef2fa;color:var(--text);font-weight:500}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:600;font-size:12px}
+  .empty{color:var(--dim);font-size:13px;padding:10px 0}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  #msg{color:var(--dim);font-size:13px;min-height:20px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🛒 迷你商城 <span style="color:var(--dim);font-size:13px;font-weight:400">（演示业务系统）</span></h1>
+  <div class="stats">
+    <div>QPS <b id="qps">0</b></div>
+    <div>错误率 <b id="err">0%</b></div>
+    <div>订单 <b id="orders">0</b></div>
+  </div>
+</header>
+
+<main>
+  <div class="card">
+    <h2>商品</h2>
+    <div class="grid" id="products"></div>
+  </div>
+
+  <div class="card">
+    <h2>最近订单</h2>
+    <table>
+      <thead><tr><th>#</th><th>商品</th><th>数量</th><th>金额</th><th>状态</th><th>时间</th><th>操作</th></tr></thead>
+      <tbody id="orderList"></tbody>
+    </table>
+    <div class="empty" id="emptyOrders">暂无订单</div>
+  </div>
+
+  <div class="card">
+    <h2>制造压力（演示用）</h2>
+    <div class="row">
+      <button class="danger" onclick="flood()">💥 疯狂连点（触发高频流量）</button>
+      <button class="ghost" onclick="resetFault()">清除故障</button>
+      <button class="ghost" onclick="resetData()">清空演示数据</button>
+      <span id="msg"></span>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+async function loadProducts(){
+  try{
+    const r = await fetch('/api/inventory');
+    const items = await r.json();
+    $('products').innerHTML = items.map(i => `
+      <div class="item">
+        <div class="name">${esc(i.name)}</div>
+        <div class="price">¥${i.price}</div>
+        <div class="qty">库存 ${i.qty}</div>
+        <button onclick="buy(${i.id})">购买</button>
+      </div>`).join('');
+  }catch(e){ $('msg').textContent = '商品加载失败：' + e.message; }
+}
+
+async function loadOrders(){
+  try{
+    const r = await fetch('/api/orders');
+    const rows = await r.json();
+    $('emptyOrders').style.display = rows.length ? 'none' : 'block';
+    $('orderList').innerHTML = rows.map(o => `<tr>
+      <td>${o.id}</td><td>#${o.item_id}</td><td>${o.qty}</td>
+      <td>¥${o.price}</td><td>${esc(o.status)}</td><td>${esc((o.created_at||'').slice(11))}</td>
+      <td>${o.status === 'created' ? `<button class="ghost" style="padding:4px 10px" onclick="payOrder(${o.id})">支付</button>` : ''}</td>
+    </tr>`).join('');
+  }catch(e){ /* 忽略 */ }
+}
+
+async function loadMetrics(){
+  try{
+    const r = await fetch('/metrics');
+    const m = await r.json();
+    $('qps').textContent = m.qps;
+    $('err').textContent = m.error_rate + '%';
+    $('orders').textContent = m.orders;
+  }catch(e){}
+}
+
+async function buy(id){
+  $('msg').textContent = '下单中…';
+  try{
+    const r = await fetch('/api/orders', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({item_id:id, qty:1})
+    });
+    const d = await r.json();
+    $('msg').textContent = r.ok ? `下单成功：${d.item_id} x${d.qty}` : `下单失败：${d.error||r.status}`;
+    loadProducts(); loadOrders(); loadMetrics();
+  }catch(e){ $('msg').textContent = '下单异常：' + e.message; }
+}
+
+async function flood(){
+  $('msg').textContent = '正在触发高频访问…';
+  try{
+    const r = await fetch('/admin/inject?mode=flood', {method:'POST'});
+    await r.json();
+    // 前端也疯狂点
+    for(let i=0;i<40;i++){
+      fetch('/api/orders', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({item_id:1, qty:1})}).catch(()=>{});
+    }
+    $('msg').textContent = '已触发高频流量，运维 Agent 应会限流/封禁';
+  }catch(e){ $('msg').textContent = '触发失败：' + e.message; }
+}
+
+async function resetFault(){
+  try{ await fetch('/admin/reset', {method:'POST'}); $('msg').textContent = '故障已清除'; }
+  catch(e){ $('msg').textContent = '清除失败：' + e.message; }
+}
+
+async function resetData(){
+  try{
+    await fetch('/admin/reset-data', {method:'POST'});
+    $('msg').textContent = '演示数据已清空（订单清空、库存复位）';
+    loadProducts(); loadOrders(); loadMetrics();
+  }catch(e){ $('msg').textContent = '清空失败：' + e.message; }
+}
+
+async function payOrder(id){
+  try{
+    const r = await fetch('/api/pay', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({order_id:id})});
+    const d = await r.json();
+    $('msg').textContent = r.ok ? `订单 ${d.order_id} 已支付` : '支付失败';
+    loadOrders();
+  }catch(e){ $('msg').textContent = '支付异常：' + e.message; }
+}
+
+loadProducts(); loadOrders(); loadMetrics();
+setInterval(loadMetrics, 3000);
+setInterval(loadOrders, 4000);
+</script>
+</body>
+</html>
