@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-# 重启 order_app（彻底清理旧实例 + 等待端口释放 + setsid 独立会话）
+# 重启 order_app
+#
+# 关键：必须跑在**独立的 systemd 用户单元**里，不能继承 aiops-router.service 的 cgroup。
+# 否则 `systemctl --user restart aiops-router` 会连带把 order_app 一起 SIGTERM 掉
+# （setsid 只能脱离进程组，脱离不了 cgroup）。
 set -uo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 
 APP="order_app.py"
 PIDFILE="order_app.pid"
 LOG="order_app.log"
 PORT=8081
+UNIT="order-app"
+WORKDIR="$(pwd)"
 
 port_busy() {
     python3 - "$PORT" <<'PY' 2>/dev/null
@@ -15,19 +21,20 @@ s = socket.socket()
 s.settimeout(0.3)
 try:
     s.connect(("127.0.0.1", int(sys.argv[1])))
-    sys.exit(0)      # 端口被占用
+    sys.exit(0)      # 占用
 except Exception:
-    sys.exit(1)      # 端口空闲
+    sys.exit(1)      # 空闲
 finally:
     s.close()
 PY
 }
 
-echo "[restart] 清理旧 order_app 实例"
+echo "[restart] 停止旧的 order_app（systemd 单元 + 裸进程）"
+systemctl --user stop "$UNIT" 2>/dev/null || true
+systemctl --user reset-failed "$UNIT" 2>/dev/null || true
 pkill -f "python.*$APP" 2>/dev/null || true
 sleep 1
 
-# 最多等 5 秒让端口释放；仍占用则强杀
 for _ in $(seq 1 10); do
     port_busy || break
     sleep 0.5
@@ -37,27 +44,42 @@ if port_busy; then
     pkill -9 -f "python.*$APP" 2>/dev/null || true
     sleep 1
 fi
-
-PY="venv/bin/python"
-[ -x "$PY" ] || PY="python3"
-
-# 启动前确认端口确实空闲（此时占用说明还有旧进程）
 if port_busy; then
     echo "[restart] 错误：端口 $PORT 在启动前仍被占用，放弃启动"
     exit 1
 fi
 
-setsid "$PY" "$APP" >> "$LOG" 2>&1 < /dev/null &
+PY="$WORKDIR/venv/bin/python"
+[ -x "$PY" ] || PY="$(command -v python3)"
 
-# 等新实例真正开始监听端口，再读 pidfile
-for _ in $(seq 1 20); do
+if systemctl --user show-environment >/dev/null 2>&1; then
+    # ---- 独立 cgroup：Router 重启不会带死它 ----
+    systemd-run --user --unit="$UNIT" --collect --quiet \
+        --working-directory="$WORKDIR" \
+        --setenv=PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin" \
+        /bin/bash -c "exec '$PY' '$WORKDIR/$APP' >> '$WORKDIR/$LOG' 2>&1"
+    MODE="systemd-unit($UNIT)"
+else
+    setsid "$PY" "$APP" >> "$LOG" 2>&1 < /dev/null &
+    MODE="setsid(无 systemd 兜底)"
+fi
+
+for _ in $(seq 1 24); do
     sleep 0.5
     port_busy && break
 done
 
 NEW_PID="$(cat "$PIDFILE" 2>/dev/null || true)"
+if [ -z "$NEW_PID" ]; then
+    NEW_PID="$(systemctl --user show "$UNIT" -p MainPID 2>/dev/null | cut -d= -f2)"
+fi
+
 if port_busy; then
-    echo "[restart] order_app 已启动（setsid），PID=${NEW_PID:-?}"
+    echo "[restart] order_app 已启动（$MODE），PID=${NEW_PID:-?}"
+    # 打印 cgroup，便于确认已脱离 Router
+    if [ -r "/proc/${NEW_PID}/cgroup" ]; then
+        echo "[restart] cgroup: $(head -1 "/proc/${NEW_PID}/cgroup" 2>/dev/null)"
+    fi
 else
     echo "[restart] 启动失败：端口 $PORT 未监听"
     exit 1
