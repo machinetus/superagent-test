@@ -37,12 +37,13 @@ PORT = int(os.environ.get("ORDER_PORT", "8081"))
 
 app = Flask(__name__)
 _start = time.time()
-_state = {"fault": None, "flood_on": False, "orders": 0, "errors": 0}
+_state = {"fault": None, "fault_hist": [], "flood_on": False, "orders": 0, "errors": 0}
 _lock = threading.Lock()
 
 
 def log(msg):
-    print(f"[order_app] {msg}", flush=True)
+    """业务日志：带时间戳，方便诊断官按时间过滤历史噪音。"""
+    print(f"[order_app {datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
 def init_db():
@@ -62,9 +63,24 @@ def init_db():
     con.close()
 
 
+def _snapshot():
+    """告警时刻的状态快照，供 AI 诊断对齐时间点（避免被后续故障带偏）。"""
+    with _lock:
+        return {
+            "at": datetime.now().isoformat(timespec="seconds"),
+            "fault": _state["fault"],
+            "fault_hist": [dict(h) for h in _state.get("fault_hist", [])][-5:],
+            "cpu": cpu_pct(),
+            "mem": mem_pct(),
+            "orders": _state["orders"],
+            "errors": _state["errors"],
+        }
+
+
 def report(status, keyword, src="127.0.0.1"):
-    """把异常上报给 Router（真实异常路径）。"""
-    body = {"service": "order_app", "status": status, "keyword": keyword, "src": src}
+    """把异常上报给 Router（真实异常路径），附带告警时刻快照。"""
+    body = {"service": "order_app", "status": status, "keyword": keyword,
+            "src": src, "snapshot": _snapshot()}
     try:
         req = urllib.request.Request(ROUTER_URL, data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"}, method="POST")
@@ -289,6 +305,8 @@ def admin_inject():
     if mode not in ("hang", "slow", "dirty", "flood", "db_lock"):
         return jsonify(error="unknown mode"), 400
     _state["fault"] = mode
+    _state["fault_hist"].append({"at": datetime.now().isoformat(timespec="seconds"), "mode": mode})
+    _state["fault_hist"] = _state["fault_hist"][-20:]
     log(f"注入故障: {mode}")
     if mode == "hang":
         report("hang", "服务无响应（接口卡死）")
@@ -308,6 +326,8 @@ def admin_inject():
 @app.post("/admin/reset")
 def admin_reset():
     _state["fault"] = None
+    _state["fault_hist"].append({"at": datetime.now().isoformat(timespec="seconds"), "mode": "cleared"})
+    _state["fault_hist"] = _state["fault_hist"][-20:]
     _state["flood_on"] = False
     log("故障已清除")
     return jsonify(ok=True)
